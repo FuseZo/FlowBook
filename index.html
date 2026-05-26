@@ -684,10 +684,13 @@
     <span class="mobile-nav-icon">➕</span>เพิ่ม
   </div>
   <div class="mobile-nav-item" onclick="showPage('budget')">
-    <span class="mobile-nav-icon">🎯</span>งบประมาณ
+    <span class="mobile-nav-icon">🎯</span>งบฯ
   </div>
   <div class="mobile-nav-item" onclick="showPage('analytics')">
     <span class="mobile-nav-icon">📈</span>รายงาน
+  </div>
+  <div class="mobile-nav-item" onclick="showPage('data')">
+    <span class="mobile-nav-icon">💾</span>ข้อมูล
   </div>
 </nav>
 
@@ -739,8 +742,13 @@ function showPage(id) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.mobile-nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + id).classList.add('active');
-  const idx = ['dashboard','slip','transactions','add','budget','analytics','data'].indexOf(id);
-  if (idx >= 0) document.querySelectorAll('.nav-item')[idx] && document.querySelectorAll('.nav-item')[idx].classList.add('active');
+  // Sidebar active — matches sidebar order
+  const sidebarIdx = ['dashboard','slip','transactions','add','budget','analytics','data'].indexOf(id);
+  if (sidebarIdx >= 0) { const el = document.querySelectorAll('.nav-item')[sidebarIdx]; if (el) el.classList.add('active'); }
+  // Mobile nav active — match by onclick attribute
+  document.querySelectorAll('.mobile-nav-item').forEach(n => {
+    if (n.getAttribute('onclick') === "showPage('" + id + "')") n.classList.add('active');
+  });
   if (id === 'dashboard') renderDashboard();
   if (id === 'transactions') { renderFilterOptions(); renderTransactions(); }
   if (id === 'add') initAddForm();
