@@ -654,6 +654,25 @@
       </div>
     </div>
 
+
+    <div class="card" style="margin-top:0;">
+      <div class="section-title" style="margin-bottom: 12px;">🐙 GitHub Gist Database</div>
+      <p style="color:var(--text2); font-size:13px; margin-bottom: 14px; line-height:1.6;">เชื่อมต่อ GitHub Gist เพื่อ sync ข้อมูลข้ามอุปกรณ์ได้ — ใช้งานได้ฟรี ไม่ต้องมี server</p>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>GitHub Personal Access Token <a href="https://github.com/settings/tokens" target="_blank" style="color:var(--accent); font-size:11px;">(สร้างที่นี่ → เลือก scope: gist)</a></label>
+        <input type="password" id="gh-token" placeholder="ghp_xxxxxxxxxxxx" oninput="saveGHSettings()">
+      </div>
+      <div class="form-group" style="margin-bottom:14px;">
+        <label>Gist ID <span style="color:var(--text3); font-size:11px;">(เว้นว่างเพื่อสร้างใหม่)</span></label>
+        <input type="text" id="gh-gist-id" placeholder="จะถูกกรอกอัตโนมัติหลังสร้าง" oninput="saveGHSettings()">
+      </div>
+      <div class="btn-row" style="flex-wrap:wrap; gap:8px;">
+        <button class="btn btn-primary" onclick="githubPush()">☁️ Push ขึ้น GitHub</button>
+        <button class="btn btn-outline" onclick="githubPull()">⬇️ Pull จาก GitHub</button>
+        <button class="btn btn-outline" onclick="testGHToken()">🔑 ทดสอบ Token</button>
+      </div>
+      <div id="gh-status" style="margin-top:10px; font-size:13px;"></div>
+    </div>
     <div class="card">
       <div class="section-title" style="margin-bottom: 12px;">🗑️ ล้างข้อมูล</div>
       <p style="color:var(--text2); font-size:13px; margin-bottom: 16px; line-height:1.6;">ลบข้อมูลทั้งหมดออกจากระบบ ไม่สามารถกู้คืนได้หากไม่ได้สำรองข้อมูลไว้</p>
@@ -979,39 +998,113 @@ async function processSlipOCR(file) {
 
 function parseOCRSlip(text) {
   const data = { bank: null, status: 'สำเร็จ', date: null, time: null, from: null, from_account: null, to: null, to_account: null, amount: null, ref: null, type: 'transfer' };
+  const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
+  const textLower = text.toLowerCase();
 
-  // Amount — last decimal number wins (largest context)
-  const amounts = text.match(/([0-9,]+\.[0-9]{2})/g);
-  if (amounts && amounts.length > 0) {
-    data.amount = parseFloat(amounts[amounts.length - 1].replace(/,/g, ''));
-  }
-
-  // Date — Thai or numeric format
-  const dateMatch = text.match(/([0-9]{1,2}[\s\/\-][ก-๙a-zA-Z\.]+[\s\/\-][0-9]{2,4})|([0-9]{1,2}[\s\/\-][0-9]{1,2}[\s\/\-][0-9]{2,4})/);
-  if (dateMatch) {
-    data.date = dateMatch[0].trim();
-    // Try to normalize to YYYY-MM-DD
-    const parts = data.date.split(/[\s\/\-]/);
-    if (parts.length === 3 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1]) && /^\d+$/.test(parts[2])) {
-      const y = parts[2].length === 2 ? '20' + parts[2] : (parseInt(parts[2]) > 2500 ? String(parseInt(parts[2]) - 543) : parts[2]);
-      data.date = `${y}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+  // ===== BANK DETECTION (ครอบคลุมทุกธนาคารไทย) =====
+  const bankMap = [
+    { keys: ['กสิกรไทย','kasikorn','kbank','กสิกร'], name: 'KBank' },
+    { keys: ['ไทยพาณิชย์','scb','siam commercial'], name: 'SCB' },
+    { keys: ['กรุงเทพ','bangkok bank','bbl'], name: 'BBL' },
+    { keys: ['กรุงไทย','krungthai','ktb'], name: 'KTB' },
+    { keys: ['กรุงศรี','krungsri','bay','ayudhya'], name: 'BAY' },
+    { keys: ['ทหารไทยธนชาต','ttb','tmb','ธนชาต'], name: 'TTB' },
+    { keys: ['ออมสิน','government savings','gsb'], name: 'GSB' },
+    { keys: ['ธอส','อาคารสงเคราะห์','ghb'], name: 'GHB' },
+    { keys: ['ธกส','เพื่อการเกษตร','baac'], name: 'BAAC' },
+    { keys: ['ยูโอบี','uob'], name: 'UOB' },
+    { keys: ['ซิตี้แบงก์','citibank','citi'], name: 'Citi' },
+    { keys: ['ซีไอเอ็มบี','cimb'], name: 'CIMB' },
+    { keys: ['แลนด์แอนด์เฮ้าส์','lhbank','lh bank'], name: 'LHBank' },
+    { keys: ['ทิสโก้','tisco'], name: 'TISCO' },
+    { keys: ['เกียรตินาคินภัทร','kkp','kiatnakin'], name: 'KKP' },
+    { keys: ['ไอซีบีซี','icbc'], name: 'ICBC' },
+    { keys: ['สแตนดาร์ดชาร์เตอร์','standard chartered','scbt'], name: 'SCBT' },
+    { keys: ['ธนาคารอิสลาม','ibank','islamic'], name: 'IBank' },
+    { keys: ['promtpay','พร้อมเพย์','promptpay'], name: 'PromptPay' },
+  ];
+  for (const b of bankMap) {
+    if (b.keys.some(k => text.includes(k) || textLower.includes(k.toLowerCase()))) {
+      data.bank = b.name; break;
     }
   }
 
-  // Time
-  const timeMatch = text.match(/([0-9]{1,2}:[0-9]{2}(:[0-9]{2})?)/);
+  // ===== STATUS =====
+  if (/ไม่สำเร็จ|ล้มเหลว|failed|unsuccessful/i.test(text)) data.status = 'ไม่สำเร็จ';
+  else if (/สำเร็จ|สมบูรณ์|success|successful|completed/i.test(text)) data.status = 'สำเร็จ';
+
+  // ===== AMOUNT — ดึงยอดจริง ไม่ใช่เลขบัญชี =====
+  // หาตัวเลข decimal ทั้งหมด แล้วเอาที่ใหญ่ที่สุดที่ไม่ใช่ปีหรือเลขบัญชี
+  const allAmounts = [...text.matchAll(/([0-9,]{1,10}\.[0-9]{2})/g)]
+    .map(m => parseFloat(m[1].replace(/,/g,'')))
+    .filter(n => n >= 1 && n < 10000000);
+  // ลอง keyword ก่อน: จำนวนเงิน, ยอดโอน, Amount
+  const amtKeywordMatch = text.match(/(?:จำนวนเงิน|ยอดโอน|ยอดชำระ|amount)[^\d]*([0-9,]+\.[0-9]{2})/i);
+  if (amtKeywordMatch) {
+    data.amount = parseFloat(amtKeywordMatch[1].replace(/,/g,''));
+  } else if (allAmounts.length > 0) {
+    // เอายอดที่ปรากฏในบรรทัดที่ไม่มีคำว่า "xxx" (masked account)
+    data.amount = allAmounts[allAmounts.length - 1];
+  }
+
+  // ===== DATE — รองรับรูปแบบวันที่ไทยและสากล =====
+  const thaiMonths = { 'ม.ค':1,'มกราคม':1,'ก.พ':2,'กุมภาพันธ์':2,'มี.ค':3,'มีนาคม':3,'เม.ย':4,'เมษายน':4,'พ.ค':5,'พฤษภาคม':5,'มิ.ย':6,'มิถุนายน':6,'ก.ค':7,'กรกฎาคม':7,'ส.ค':8,'สิงหาคม':8,'ก.ย':9,'กันยายน':9,'ต.ค':10,'ตุลาคม':10,'พ.ย':11,'พฤศจิกายน':11,'ธ.ค':12,'ธันวาคม':12 };
+  // รูปแบบ: 15 พ.ค. 2568 หรือ 15 พฤษภาคม 2568
+  const thaiDateMatch = text.match(/([0-9]{1,2})\s*([ก-๙a-zA-Z\.]+)\s*([0-9]{4})/);
+  if (thaiDateMatch) {
+    const d = thaiDateMatch[1].padStart(2,'0');
+    const mStr = thaiDateMatch[2].replace(/\.$/,'');
+    const y = parseInt(thaiDateMatch[3]);
+    const mNum = thaiMonths[mStr] || thaiMonths[mStr + '.'];
+    if (mNum) {
+      const realY = y > 2500 ? y - 543 : y;
+      data.date = `${realY}-${String(mNum).padStart(2,'0')}-${d}`;
+    }
+  }
+  // รูปแบบ: DD/MM/YYYY หรือ DD-MM-YYYY
+  if (!data.date) {
+    const numDateMatch = text.match(/([0-9]{1,2})[\/-]([0-9]{1,2})[\/-]([0-9]{2,4})/);
+    if (numDateMatch) {
+      let [, dd, mm, yy] = numDateMatch;
+      const y = yy.length === 2 ? '20'+yy : (parseInt(yy) > 2500 ? String(parseInt(yy)-543) : yy);
+      data.date = `${y}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+    }
+  }
+
+  // ===== TIME =====
+  const timeMatch = text.match(/([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)/);
   if (timeMatch) data.time = timeMatch[1].slice(0,5);
 
-  // Reference ID
-  const refMatch = text.match(/(202[0-9A-Za-z]{6,})/);
-  if (refMatch) data.ref = refMatch[1];
-
-  // Bank detection
-  const bankMap = { 'กสิกรไทย': 'KBank', 'kbank': 'KBank', 'ไทยพาณิชย์': 'SCB', 'scb': 'SCB', 'กรุงเทพ': 'BBL', 'bbl': 'BBL', 'กรุงไทย': 'KTB', 'ktb': 'KTB', 'กรุงศรี': 'BAY', 'bay': 'BAY', 'ออมสิน': 'GSB', 'gsb': 'GSB' };
-  const textLower = text.toLowerCase();
-  for (const [k, v] of Object.entries(bankMap)) {
-    if (text.includes(k) || textLower.includes(k.toLowerCase())) { data.bank = v; break; }
+  // ===== REFERENCE ID =====
+  const refPatterns = [
+    /(?:ref(?:erence)?|อ้างอิง|เลขอ้างอิง|รหัส)[^\d]*([A-Z0-9]{8,})/i,
+    /(20[0-9]{2}[0-9A-Z]{6,})/,
+    /([A-Z]{2,}[0-9]{8,})/,
+  ];
+  for (const p of refPatterns) {
+    const m = text.match(p);
+    if (m) { data.ref = m[1]; break; }
   }
+
+  // ===== ACCOUNT NUMBERS (xxx-x-xxxxx-x format) =====
+  const accountNums = [...text.matchAll(/([0-9x]{3}-[0-9x]-[0-9x]{5}-[0-9x]|[0-9x]{10,12})/gi)].map(m => m[1]);
+  if (accountNums.length >= 2) {
+    data.from_account = accountNums[0];
+    data.to_account = accountNums[1];
+  } else if (accountNums.length === 1) {
+    data.to_account = accountNums[0];
+  }
+
+  // ===== FROM / TO NAMES =====
+  // หาชื่อหลัง keyword: จาก, ผู้โอน, from, ถึง, ผู้รับ, to
+  const fromMatch = text.match(/(?:จาก|ผู้โอน|from)[:\s]+([ก-๙a-zA-Z][ก-๙a-zA-Z0-9\s]{2,30})/i);
+  if (fromMatch) data.from = fromMatch[1].trim();
+  const toMatch = text.match(/(?:ถึง|ไปยัง|ผู้รับ|to)[:\s]+([ก-๙a-zA-Z][ก-๙a-zA-Z0-9\s]{2,30})/i);
+  if (toMatch) data.to = toMatch[1].trim();
+
+  // PromptPay ID (เบอร์โทร / เลขบัตร)
+  const ppMatch = text.match(/(?:พร้อมเพย์|promptpay)[^\d]*([0-9\-]{9,13})/i);
+  if (ppMatch && !data.to_account) data.to_account = ppMatch[1];
 
   return data;
 }
@@ -1439,9 +1532,11 @@ function clearAllData() {
   if (!confirm('⚠️ ต้องการลบข้อมูลทั้งหมด? ไม่สามารถกู้คืนได้!')) return;
   if (!confirm('ยืนยันอีกครั้ง: ลบข้อมูลทั้งหมดใช่หรือไม่?')) return;
   transactions = []; budgets = {}; slipHistory = [];
+  try { ['fb_transactions','fb_budgets','fb_slips'].forEach(k => localStorage.removeItem(k)); } catch(e) {}
+  ['fb_transactions','fb_budgets','fb_slips'].forEach(k => delete _memStore[k]);
   saveData();
-  alert('ล้างข้อมูลทั้งหมดแล้ว');
-  renderDataStats();
+  alert('✅ ล้างข้อมูลทั้งหมดแล้ว');
+  location.reload();
 }
 
 function renderDataStats() {
@@ -1482,28 +1577,91 @@ function saveData() {
 }
 
 // ==================== INIT ====================
-function loadDemoData() {
-  if (transactions.length > 0) return;
-  const now = new Date();
-  const ym = now.toISOString().slice(0,7);
-  const demos = [
-    { id:1, type:'income', date: ym+'-01', amount:45000, desc:'เงินเดือนประจำเดือน', cat:'เงินเดือน', subcat:'เงินเดือนประจำ', note:'', ref:'' },
-    { id:2, type:'income', date: ym+'-10', amount:5000, desc:'งานฟรีแลนซ์', cat:'ธุรกิจ', subcat:'ค่าบริการ', note:'', ref:'' },
-    { id:3, type:'expense', date: ym+'-02', amount:8500, desc:'ค่าเช่าห้อง', cat:'ที่อยู่อาศัย', subcat:'ค่าเช่า', note:'', ref:'' },
-    { id:4, type:'expense', date: ym+'-03', amount:1200, desc:'ค่าอาหารสัปดาห์แรก', cat:'อาหาร', subcat:'อาหารกลางวัน', note:'', ref:'' },
-    { id:5, type:'expense', date: ym+'-05', amount:2500, desc:'เติมน้ำมัน', cat:'การเดินทาง', subcat:'น้ำมัน', note:'', ref:'' },
-    { id:6, type:'expense', date: ym+'-07', amount:890, desc:'Netflix + Spotify', cat:'ความบันเทิง', subcat:'หนัง/ซีรีส์', note:'', ref:'' },
-    { id:7, type:'expense', date: ym+'-08', amount:3200, desc:'ชอปปิ้ง Lazada', cat:'ช็อปปิ้ง', subcat:'อุปกรณ์อิเล็กทรอนิกส์', note:'', ref:'' },
-    { id:8, type:'transfer', date: ym+'-10', amount:5000, desc:'โอนเงินให้แม่', cat:'โอนเงิน', subcat:'โอนให้ครอบครัว', note:'', ref:'' },
-    { id:9, type:'expense', date: ym+'-12', amount:450, desc:'ยาและวิตามิน', cat:'สุขภาพ', subcat:'ยา', note:'', ref:'' },
-    { id:10, type:'expense', date: ym+'-15', amount:1800, desc:'ค่าไฟฟ้า', cat:'ที่อยู่อาศัย', subcat:'ค่าไฟ', note:'', ref:'' },
-  ];
-  transactions = demos;
-  budgets[ym] = { 'อาหาร': 6000, 'ที่อยู่อาศัย': 12000, 'การเดินทาง': 4000, 'ความบันเทิง': 2000, 'ช็อปปิ้ง': 3000 };
-  saveData();
+
+// ==================== GITHUB GIST DATABASE ====================
+function getGHSettings() {
+  return {
+    token: document.getElementById('gh-token')?.value || storage.getItem('gh_token') || '',
+    gistId: document.getElementById('gh-gist-id')?.value || storage.getItem('gh_gist_id') || ''
+  };
+}
+function saveGHSettings() {
+  const token = document.getElementById('gh-token')?.value;
+  const gistId = document.getElementById('gh-gist-id')?.value;
+  if (token) storage.setItem('gh_token', token);
+  if (gistId !== undefined) storage.setItem('gh_gist_id', gistId);
+}
+function ghStatus(msg, color) {
+  const el = document.getElementById('gh-status');
+  if (el) { el.textContent = msg; el.style.color = color || 'var(--text2)'; }
+}
+function loadGHSettingsUI() {
+  const t = storage.getItem('gh_token') || '';
+  const g = storage.getItem('gh_gist_id') || '';
+  const te = document.getElementById('gh-token');
+  const ge = document.getElementById('gh-gist-id');
+  if (te && t) te.value = t;
+  if (ge && g) ge.value = g;
 }
 
-loadDemoData();
+async function testGHToken() {
+  const { token } = getGHSettings();
+  if (!token) { ghStatus('❌ กรุณากรอก Token ก่อน', 'var(--red)'); return; }
+  ghStatus('กำลังทดสอบ...', 'var(--text2)');
+  try {
+    const r = await fetch('https://api.github.com/user', { headers: { Authorization: 'Bearer ' + token, 'X-GitHub-Api-Version': '2022-11-28' } });
+    const d = await r.json();
+    if (r.ok) ghStatus('✅ Token ใช้ได้ — บัญชี: ' + d.login, 'var(--green)');
+    else ghStatus('❌ Token ไม่ถูกต้อง: ' + (d.message || r.status), 'var(--red)');
+  } catch(e) { ghStatus('❌ เชื่อมต่อไม่ได้: ' + e.message, 'var(--red)'); }
+}
+
+async function githubPush() {
+  const { token, gistId } = getGHSettings();
+  if (!token) { ghStatus('❌ กรุณากรอก Token ก่อน', 'var(--red)'); return; }
+  ghStatus('⏳ กำลัง Push...', 'var(--text2)');
+  const payload = JSON.stringify({ transactions, budgets, slipHistory, updatedAt: new Date().toISOString() }, null, 2);
+  const body = { description: 'FlowBook — cashflow data', public: false, files: { 'flowbook_data.json': { content: payload } } };
+  try {
+    let r, d;
+    if (gistId) {
+      r = await fetch('https://api.github.com/gists/' + gistId, { method: 'PATCH', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' }, body: JSON.stringify(body) });
+    } else {
+      r = await fetch('https://api.github.com/gists', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' }, body: JSON.stringify(body) });
+    }
+    d = await r.json();
+    if (r.ok) {
+      storage.setItem('gh_gist_id', d.id);
+      const ge = document.getElementById('gh-gist-id');
+      if (ge) ge.value = d.id;
+      ghStatus('✅ Push สำเร็จ! Gist ID: ' + d.id + ' | ' + new Date().toLocaleTimeString('th-TH'), 'var(--green)');
+    } else {
+      ghStatus('❌ Push ล้มเหลว: ' + (d.message || r.status), 'var(--red)');
+    }
+  } catch(e) { ghStatus('❌ Error: ' + e.message, 'var(--red)'); }
+}
+
+async function githubPull() {
+  const { token, gistId } = getGHSettings();
+  if (!token || !gistId) { ghStatus('❌ กรุณากรอก Token และ Gist ID ก่อน', 'var(--red)'); return; }
+  ghStatus('⏳ กำลัง Pull...', 'var(--text2)');
+  try {
+    const r = await fetch('https://api.github.com/gists/' + gistId, { headers: { Authorization: 'Bearer ' + token, 'X-GitHub-Api-Version': '2022-11-28' } });
+    const d = await r.json();
+    if (!r.ok) { ghStatus('❌ Pull ล้มเหลว: ' + (d.message || r.status), 'var(--red)'); return; }
+    const fileContent = d.files['flowbook_data.json']?.content;
+    if (!fileContent) { ghStatus('❌ ไม่พบไฟล์ flowbook_data.json ใน Gist', 'var(--red)'); return; }
+    const parsed = JSON.parse(fileContent);
+    if (parsed.transactions) transactions = parsed.transactions;
+    if (parsed.budgets) budgets = parsed.budgets;
+    if (parsed.slipHistory) slipHistory = parsed.slipHistory;
+    saveData();
+    renderDashboard();
+    ghStatus('✅ Pull สำเร็จ! อัปเดต: ' + (parsed.updatedAt ? new Date(parsed.updatedAt).toLocaleString('th-TH') : '—'), 'var(--green)');
+  } catch(e) { ghStatus('❌ Error: ' + e.message, 'var(--red)'); }
+}
+
+loadGHSettingsUI();
 showPage('dashboard');
 </script>
 </body>
